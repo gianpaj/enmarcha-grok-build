@@ -1,161 +1,120 @@
 import { useEffect, useRef } from "react";
 import type { WaveMode } from "@/lib/demo-call";
 
-const SAMPLES = 280;
+const STEPS = 88;
 
-function readColor(el: HTMLElement, name: string, fallback: string): string {
-  const value = getComputedStyle(el).getPropertyValue(name).trim();
-  return value || fallback;
-}
-
-function withAlpha(color: string, alpha: number): string {
-  const hex = color.match(/^#([\da-f]{6})$/i);
-  if (hex) {
-    const n = parseInt(hex[1], 16);
-    const r = (n >> 16) & 255;
-    const g = (n >> 8) & 255;
-    const b = n & 255;
-    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-  }
-  return color;
-}
-
-function voiceSample(phase: number, mode: WaveMode): number {
+function voiceSample(p: number, mode: WaveMode): number {
   if (mode === "idle") {
-    return Math.sin(phase * 0.55) * 0.04 + Math.sin(phase * 1.15) * 0.018;
+    return Math.sin(p) * 0.42 + Math.sin(p * 1.8 + 0.4) * 0.16;
   }
-  const pace = mode === "speak" ? 1 : 0.42;
-  const p = phase * pace;
-  const syllable = Math.pow(Math.max(0, Math.sin(p * 0.38)), 1.4);
+  const gate = 0.38 + 0.62 * Math.pow(Math.max(0, Math.sin(p * 0.62)), 1.15);
   const vowel =
-    Math.sin(p * 1.12) * 0.56 + Math.sin(p * 2.27 + 0.5) * 0.26 + Math.sin(p * 3.84) * 0.1;
-  let sample = vowel * (0.18 + 0.82 * syllable);
-  if (mode === "speak" && Math.sin(p * 0.38) > 0.86) {
-    sample += Math.sin(p * 14.5) * 0.16;
-  }
-  return mode === "think" ? sample * 0.42 : sample;
+    Math.sin(p * 1.65) * 0.64 + Math.sin(p * 3.05 + 0.7) * 0.26 + Math.sin(p * 4.8) * 0.1;
+  const tick = Math.sin(p * 0.62) > 0.78 ? Math.sin(p * 12.5) * 0.2 : 0;
+  const sample = vowel * gate + tick;
+  return mode === "think" ? sample * 0.62 : sample;
 }
 
-type Props = {
-  mode: WaveMode;
-  generation: number;
-};
+function curve(points: Array<[number, number]>): string {
+  const first = points[0];
+  let d = `M ${first[0].toFixed(1)} ${first[1].toFixed(1)}`;
+  for (let i = 1; i < points.length - 1; i++) {
+    const a = points[i];
+    const b = points[i + 1];
+    const xc = (a[0] + b[0]) / 2;
+    const yc = (a[1] + b[1]) / 2;
+    d += ` Q ${a[0].toFixed(1)} ${a[1].toFixed(1)} ${xc.toFixed(1)} ${yc.toFixed(1)}`;
+  }
+  const last = points[points.length - 1];
+  d += ` L ${last[0].toFixed(1)} ${last[1].toFixed(1)}`;
+  return d;
+}
 
-export function Waveform({ mode, generation }: Props) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+export function Waveform({ mode }: { mode: WaveMode }) {
+  const strokeRef = useRef<SVGPathElement>(null);
+  const fillRef = useRef<SVGPathElement>(null);
   const modeRef = useRef(mode);
   modeRef.current = mode;
 
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    const stroke = strokeRef.current;
+    const fill = fillRef.current;
+    const svg = stroke?.ownerSVGElement;
+    if (!stroke || !fill || !svg) return;
 
-    const buffer = new Float32Array(SAMPLES);
-    let phase = 0;
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const voice = getComputedStyle(svg).getPropertyValue("--voice").trim() || "#1c6b4a";
+    const ink = getComputedStyle(svg).getPropertyValue("--ink").trim() || "#1a1814";
+    let time = 1.15;
     let raf = 0;
     let alive = true;
-    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-    const draw = () => {
+    const paint = () => {
       if (!alive) return;
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      const width = canvas.clientWidth;
-      const height = canvas.clientHeight;
-      const pxW = Math.max(1, Math.floor(width * dpr));
-      const pxH = Math.max(1, Math.floor(height * dpr));
-      if (canvas.width !== pxW || canvas.height !== pxH) {
-        canvas.width = pxW;
-        canvas.height = pxH;
-      }
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.clearRect(0, 0, width, height);
-
       const current = reduced ? "idle" : modeRef.current;
-      const step = current === "speak" ? 0.34 : current === "think" ? 0.16 : 0.05;
       if (!reduced) {
-        for (let k = 0; k < 2; k++) {
-          phase += step;
-          buffer.copyWithin(0, 1);
-          buffer[SAMPLES - 1] = voiceSample(phase, current);
-        }
-      } else if (buffer[10] === 0) {
-        for (let i = 0; i < SAMPLES; i++) buffer[i] = voiceSample(i * 0.2, "idle");
+        time += current === "speak" ? 0.055 : current === "think" ? 0.026 : 0.01;
       }
-
-      const voice = readColor(canvas, "--voice", "#1c6b4a");
-      const ink = readColor(canvas, "--ink", "#1a1814");
-      const speaking = current === "speak" || current === "think";
-      const stroke = speaking ? voice : ink;
+      const width = 1000;
+      const height = 240;
       const mid = height / 2;
-      const gain = height * (current === "speak" ? 0.46 : current === "think" ? 0.28 : 0.22);
-
-      ctx.beginPath();
-      ctx.moveTo(0, mid);
-      ctx.lineTo(width, mid);
-      ctx.strokeStyle = withAlpha(ink, 0.14);
-      ctx.lineWidth = 1;
-      ctx.stroke();
-
-      const point = (i: number, sign: number) => {
-        const taper = Math.sin((i / (SAMPLES - 1)) * Math.PI);
-        const x = (i / (SAMPLES - 1)) * width;
-        const y = mid - sign * buffer[i] * taper * gain;
-        return [x, y] as const;
-      };
-
-      const strokeTop = () => {
-        ctx.beginPath();
-        const first = point(0, 1);
-        ctx.moveTo(first[0], first[1]);
-        for (let i = 1; i < SAMPLES - 1; i++) {
-          const a = point(i, 1);
-          const b = point(i + 1, 1);
-          ctx.quadraticCurveTo(a[0], a[1], (a[0] + b[0]) / 2, (a[1] + b[1]) / 2);
-        }
-        ctx.lineTo(point(SAMPLES - 1, 1)[0], point(SAMPLES - 1, 1)[1]);
-      };
-
-      ctx.beginPath();
-      const origin = point(0, 1);
-      ctx.moveTo(origin[0], origin[1]);
-      for (let i = 1; i < SAMPLES - 1; i++) {
-        const a = point(i, 1);
-        const b = point(i + 1, 1);
-        ctx.quadraticCurveTo(a[0], a[1], (a[0] + b[0]) / 2, (a[1] + b[1]) / 2);
+      const gain = height * (current === "speak" ? 0.46 : current === "think" ? 0.26 : 0.2);
+      const upper: Array<[number, number]> = [];
+      const lower: Array<[number, number]> = [];
+      for (let i = 0; i < STEPS; i++) {
+        const u = i / (STEPS - 1);
+        const edge = Math.pow(Math.sin(u * Math.PI), 0.65);
+        const spatial = current === "speak" ? 22 : current === "think" ? 14 : 7;
+        const raw = voiceSample(time * 8 + u * spatial, current);
+        const sample = Math.max(-1, Math.min(1, raw)) * edge;
+        const x = u * width;
+        const y = mid - sample * gain;
+        upper.push([x, y]);
+        lower.push([x, mid + (mid - y)]);
       }
-      const end = point(SAMPLES - 1, 1);
-      ctx.lineTo(end[0], end[1]);
-      for (let i = SAMPLES - 2; i > 0; i--) {
-        const a = point(i, -1);
-        const b = point(i - 1, -1);
-        ctx.quadraticCurveTo(a[0], a[1], (a[0] + b[0]) / 2, (a[1] + b[1]) / 2);
-      }
-      ctx.closePath();
-      ctx.fillStyle = withAlpha(stroke, speaking ? 0.16 : 0.06);
-      ctx.fill();
-
-      strokeTop();
-      ctx.strokeStyle = withAlpha(stroke, speaking ? 0.95 : 0.38);
-      ctx.lineWidth = 1.6;
-      ctx.lineJoin = "round";
-      ctx.lineCap = "round";
-      ctx.stroke();
-
-      if (!reduced) raf = requestAnimationFrame(draw);
+      const speaking = current === "speak" || current === "think";
+      stroke.setAttribute("d", curve(upper));
+      stroke.setAttribute("stroke", speaking ? voice : ink);
+      stroke.setAttribute("stroke-opacity", speaking ? "0.95" : "0.55");
+      const back = [...lower].reverse();
+      fill.setAttribute("d", `${curve(upper)} L ${back.map(([x, y]) => `${x.toFixed(1)} ${y.toFixed(1)}`).join(" L ")} Z`);
+      fill.setAttribute("fill", speaking ? voice : ink);
+      fill.setAttribute("fill-opacity", speaking ? "0.18" : "0.1");
+      if (!reduced) raf = requestAnimationFrame(paint);
     };
 
-    raf = requestAnimationFrame(draw);
+    paint();
     return () => {
       alive = false;
       cancelAnimationFrame(raf);
     };
-  }, [generation]);
+  }, []);
 
   return (
-    <div className="relative h-24 sm:h-32" aria-hidden="true">
-      <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />
-    </div>
+    <svg
+      viewBox="0 0 1000 240"
+      preserveAspectRatio="none"
+      className="h-28 w-full sm:h-36"
+      aria-hidden="true"
+    >
+      <line
+        x1="0"
+        y1="120"
+        x2="1000"
+        y2="120"
+        stroke="var(--ink)"
+        strokeOpacity="0.14"
+        vectorEffect="non-scaling-stroke"
+      />
+      <path ref={fillRef} vectorEffect="non-scaling-stroke" />
+      <path
+        ref={strokeRef}
+        fill="none"
+        strokeWidth="1.75"
+        strokeLinejoin="round"
+        strokeLinecap="round"
+        vectorEffect="non-scaling-stroke"
+      />
+    </svg>
   );
 }

@@ -114,7 +114,7 @@ function Stage({ scenario }: { scenario: Scenario }) {
         <p className="ml-auto text-sm text-muted">Sample call · Rueda</p>
       </div>
 
-      <Waveform mode={frame.mode} generation={0} />
+      <Waveform mode={frame.mode} />
 
       <p className="sr-only" aria-live="polite">
         {frame.status}. {live}
@@ -122,7 +122,7 @@ function Stage({ scenario }: { scenario: Scenario }) {
 
       <div className="min-h-24 border-t border-line pt-4">
         {frame.previous ? (
-          <p className="mb-3 line-clamp-2 text-sm leading-relaxed text-muted">
+          <p className="mb-3 hidden text-sm leading-relaxed text-muted sm:line-clamp-2">
             <span className="font-medium text-ink">
               {frame.previous.speaker === "you" ? "You" : "enMarcha"}
             </span>
